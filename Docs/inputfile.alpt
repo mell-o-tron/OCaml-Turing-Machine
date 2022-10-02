@@ -1,0 +1,151 @@
+\documentclass[a4paper,10pt]{article}
+\usepackage[margin=25mm]{geometry}
+\usepackage[utf8]{inputenc}
+\usepackage{amsmath}
+\usepackage{amsthm}
+\usepackage{amsfonts}
+\usepackage{tikz}
+\usepackage{listings}
+\usepackage{courier}
+
+\definecolor{backcolour}{rgb}{0.95,0.95,0.92}
+\lstdefinestyle{listing_style}{
+    backgroundcolor=\color{backcolour},
+    numberstyle=\tiny,
+    basicstyle=\ttfamily\footnotesize,
+    keywordstyle=\bfseries,
+    breakatwhitespace=false,
+    breaklines=true,
+    captionpos=b,
+    keepspaces=true,
+    numbers=left,
+    numbersep=5pt,
+    showspaces=false,
+    showstringspaces=false,
+    showtabs=false,
+    tabsize=2
+}
+
+\lstset{style=listing_style}
+\setlength\parindent{0pt}
+\begin{document}
+
+\section{Turing Machines in OCaml}
+\subsection{Type definitions}
+A \textbf{Turing machine} is usually represented as a 4-tuple $(Q, \Sigma, \delta, q_0)$, where:
+\begin{itemize}
+    \item $Q$ is a set of states
+    \item $\Sigma$ is an alphabet containing a few special characters ($\#$, $\triangleright$, meaning "blank" and "push to the right" respectively)
+    \item $\delta$ is a relation (in this case a function) the elements of which are called \emph{transitions}
+    \item $q_0$ is the initial state.
+\end{itemize}
+
+Where the transition $\delta$ has the signature:
+
+\[ Q \times \Sigma \to Q \times \Sigma \times \{L, R, N\} \]
+
+The effect of which is, if the machine reads a certain character in a certain state, it will print a character at the cursor position, change state, and move to the \textbf{L}eft, to the \textbf{R}ight, or \textbf{N}ot move at all.\smallskip
+
+In our representation of the Turing machine, we will \emph{omit the sets of states and symbols} (that is, the alphabet), assuming that all the states and characters that appear in the transition function are \emph{all the states} of the Turing machine.
+
+
+
+§<turing_lp.ml : ml>§
+type character  = C of char | White | Resp
+type state      = Final | State of int
+type movement   = L | R | N;;
+type transition = (state * character) -> state * character * movement
+type t_machine  = TM of transition * state
+§
+
+One thing to note is that we included the final state in the "state" type, while some authors tend to treat it as something that is not part of $Q$.\medskip
+
+A \textbf{configuration} of the Turing machine is its state and the list of characters in the \textbf{finite} non-blank portion of the tape. We are representing the latter as a 3-ple $(u, \sigma, v) \in \Sigma^\star \times \Sigma \times \Sigma^\star$:
+
+§<turing_lp.ml : ml>§
+type config     = Conf of state * character list * character * character list | Done
+§
+
+\section{Execution}
+\subsection{Single step}
+\subsubsection{Auxiliary list functions}
+We're going to need a few list functions to manipulate the tape:
+§<turing_lp.ml : ml>§
+let remove_first lst = match lst with _::lst1 -> lst1 | [] -> []
+let remove_last lst  = match (List.rev lst) with _::lst1 -> (List.rev lst1) | [] -> []
+
+let get_first lst = match lst with a::_-> a | [] -> failwith "Overflow"
+let get_last lst  = match (List.rev lst) with a::_ -> a | [] -> failwith "Underflow"
+§
+
+Note that a turing machine that does nothing but move the cursor to the right will eventually \textbf{overflow} (i.e. go beyond the finite non-blank region); these functions provide a way to recognise the situations of this kind.
+
+\subsubsection{Actual implementation}
+The \texttt{step} function has \texttt{tfun} (the transition function, of type \texttt{transition}) and a \texttt{configuration} as its arguments.\smallskip
+
+The configuration can be either:
+\begin{itemize}
+    \item \texttt{Done}, in which case the computation is complete
+    \item Current state + tape configuration, in which case we do pattern-matching on the result of the transition function applied on the current state and character, which gives us a new state, character and direction. \smallskip
+    
+    Finally, based on the direction, we can construct a new configuration, by setting the new state, "writing" the character and moving the cursor. 
+\end{itemize}
+
+§<turing_lp.ml : ml>§
+let step tfun configuration = match configuration with
+    | Conf (cur_state, l, c, r) ->
+        (match tfun (cur_state, c) with
+            | new_s, new_c, dir -> (match dir with
+                | N -> print_endline "idle"  ; Conf (new_s, l, new_c, r)
+                | L -> print_endline "left"  ; Conf (new_s, remove_last l, get_last l, new_c :: r)
+                | R -> print_endline "right" ; Conf (new_s, l @ [new_c], get_first r, remove_first r)
+                ))
+    | Done -> failwith "Computation is complete"
+§
+We're also printing the direction, for debugging purposes.
+
+\subsection{Full execution}
+The execution code is fairly simple:
+
+§<turing_lp.ml : ml>§
+let run tm (l, c, r) = match tm with
+    | TM (tfun, state) ->
+        let rec steps (configuration) = (match configuration with
+        | Conf (state, l, c, r) ->
+            (if state = Final then Done else
+                steps (step tfun (Conf (state, l, c, r))))
+        | Done -> Done)
+        in steps (Conf(state, l, c, r))
+§
+
+What it does is it maps the current configuration to the one reached after one step, and \texttt{Done} to \texttt{Done}.
+
+\subsection{Execution Example}
+Firstly, we define the tape:
+\[\triangleright a \underline{\#} a \# \# \# \#\]
+
+§<turing_lp.ml : ml>§
+
+let left  = [Resp ; C 'a']
+let cent  = White
+let right = [C 'a' ; White ; White ; White ; White]
+§
+
+Now we define a transition function; note that the function need not be total, but the patternmatching must be exhaustive.
+
+§<turing_lp.ml : ml>§
+let tfun (s, c) = match (s, c) with
+    | State x, Resp  -> State x, Resp,   R
+    | State 0, C 'a' -> State 1, C 'a',  R
+    | State 1, C 'a' -> Final,   C 'a',  R
+    | State x, C 'b' -> State x, C 'a',  N
+    | State x, White -> State x, C 'a',  N
+    | _ -> failwith ("Got stuck, transition is not total")
+§
+Finally, we may run the turing machine.
+§<turing_lp.ml : ml>§
+
+let tm = TM (tfun, State 0);;
+run tm (left, cent, right)
+§
+\end{document}
